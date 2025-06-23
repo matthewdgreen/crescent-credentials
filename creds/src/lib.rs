@@ -803,7 +803,6 @@ pub fn verify_show_mdl(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<E
             let digest = Sha256::digest(data);
             let digest248 = &digest[0..digest.len()-1];
             let digest_uint = utils::bits_to_num(digest248);
-            println!("verifier input: {}", digest_uint);
             let digest_scalar = utils::biguint_to_scalar::<CrescentFr>(&digest_uint);
             revealed_hashed.push(digest_scalar);
         }

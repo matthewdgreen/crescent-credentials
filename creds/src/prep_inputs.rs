@@ -63,7 +63,6 @@ pub fn pem_key_type(key : &str) -> Result<&str, &str> {
 pub fn pem_to_inputs<F>(issuer_pem : &str) -> Result<Vec<F>, Box<dyn std::error::Error>>
     where F: PrimeField 
 {
-    
     let inputs = match pem_key_type(issuer_pem) {
         Ok("RS256") => {
             let issuer_pub = RS256PublicKey::from_pem(issuer_pem).unwrap();
@@ -97,7 +96,6 @@ pub fn pem_to_inputs<F>(issuer_pem : &str) -> Result<Vec<F>, Box<dyn std::error:
 pub fn pem_to_pubkey_hash<F>(issuer_pem : &str) -> Result<F, Box<dyn std::error::Error>>
     where F: PrimeField 
 {
-    
     let inputs = match pem_key_type(issuer_pem) {
         Ok("RS256") => {
             let _issuer_pub = RS256PublicKey::from_pem(issuer_pem).unwrap();
@@ -109,7 +107,6 @@ pub fn pem_to_pubkey_hash<F>(issuer_pem : &str) -> Result<F, Box<dyn std::error:
             let mut digest = Sha256::digest(&issuer_key_bytes[1..]).to_vec();    // skip hashing the first byte
             digest = digest[0..digest.len()-1].to_vec();    // truncate digest to 248 bits
             let pubkey_hash = bits_to_num(&digest);
-            println!("pubkey hash in prep_inputs: {}", pubkey_hash);
             biguint_to_scalar(&pubkey_hash)
         }
         Err(e) =>  {
