@@ -30,7 +30,7 @@ curl --proto '=https' --tlsv1.3 -sSf https://sh.rustup.rs | sh
 3. Install required Python modules
 
 ```bash
-pip install python_jwt
+pip install jwcrypto
 ```
 
 4. Install [Circom](https://github.com/iden3/circom)

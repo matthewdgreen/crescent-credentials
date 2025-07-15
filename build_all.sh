@@ -10,6 +10,41 @@ shopt -s extglob
 cd "$(dirname "${BASH_SOURCE[0]}")"
 readonly BIN=$(pwd)/target/release
 
+# Check for required commands
+check_prereq() {
+  local cmd="$1"
+  if ! command -v "$cmd" &> /dev/null; then
+    echo -e "\033[0;31m❌ Error: '$cmd' is required but not installed or not in PATH.\033[0m" >&2
+    missing=true
+  fi
+}
+
+check_pip_pkg() {
+  local pkg="$1"
+  if ! python -c "import $pkg" &>/dev/null; then
+    echo -e "\033[0;31m❌ Error: Python package '$pkg' is not installed.\033[0m" >&2
+    missing=true
+  fi
+}
+
+echo "🔍 Checking prerequisites..."
+check_prereq node
+check_prereq npm
+check_prereq python
+check_prereq circom
+check_prereq rustc
+check_prereq cargo
+check_prereq ssh
+check_pip_pkg jwcrypto
+check_pip_pkg cbor2
+
+# halt if any prerequisites are missing
+if [ "${missing:-false}" = true ]; then
+  echo -e "\033[0;31m❌ Some prerequisites are missing. See circuit_setup\README.md for help with dependencies.\033[0m" >&2
+  exit 1
+fi
+
+
 RELEASE_FLAG="--release"
 SECONDS=0
 
@@ -51,7 +86,7 @@ if [ "$do_trim" = true ]; then
 fi
 
 
-crescent="${BIN}/crescent-cli.exe"
+crescent="${BIN}/crescent-cli"
 
 if [ "$do_trim" = true ]; then
   echo "Cleaning up build artifacts..."
@@ -82,8 +117,6 @@ wait
 #
 # Sample setup
 #
-cd ../sample
-# Node must be available for the .js scripts to be executed
-./setup-sample.sh
+../sample/setup-sample.sh
 
-echo -e "\033[0;32mSample completed in $SECONDS seconds\033[0m"
+echo -e "\033[0;32mBuild-all completed in $SECONDS seconds\033[0m"

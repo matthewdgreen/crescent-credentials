@@ -4,9 +4,9 @@
 # Licensed under the MIT license.
 #
 
-# Depends on python-jwt:
-#   pip install python_jwt
-# https://pypi.org/project/python-jwt/
+# Depends on jwcrypto:
+#   pip install jwcrypto
+# https://pypi.org/project/jwcrypto/
 
 # The registry of supported algorithms in JWS is found here:
 #    https://www.iana.org/assignments/jose/jose.xhtml

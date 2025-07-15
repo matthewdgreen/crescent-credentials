@@ -99,7 +99,7 @@ setup() {
         error "Algorithm (alg) not found in config.json."
     fi
 
-    blue "Name: $NAME | Credential type: ${CONFIG[credtype]} | Credential algorithm: ${CONFIG[alg]} | Device bound: ${CONFIG[device_bound]}"
+    blue "Name: $(printf "%-10s" "$NAME") | Credential type: ${CONFIG[credtype]} | Credential algorithm: ${CONFIG[alg]} | Device bound: ${CONFIG[device_bound]}"
 
     if [[ ${CONFIG[credtype]} == "mdl" ]]; then
         readonly CIRCOM_SRC_DIR="${CIRCUIT_SETUP}/circuits-mdl"
@@ -364,11 +364,14 @@ fix_symlink() {
         if [[ "$OS" == "Windows_NT" || "$(uname -o 2>/dev/null)" == "Msys" ]]; then
             echo "Creating Windows junction..."
             cmd //c "mklink /J $(cygpath -wa "$link_path") $(cygpath -wa "$target_path")"
-            git update-index --assume-unchanged "$link_path"
         else
             echo "Creating Linux symlink..."
             ln -s "$target_path" "$link_path"
         fi
+
+        # Mark the symlink as unchanged so it doesn't appear as modified in git
+        # to undo: git update-index --no-assume-unchanged "$link_path"
+        git update-index --assume-unchanged "$link_path"
     fi
 
     if [ ! -d "$link_path" ]; then

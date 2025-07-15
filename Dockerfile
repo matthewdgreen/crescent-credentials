@@ -49,7 +49,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get instal
 RUN python3 -m venv /venv
 ENV PATH="/venv/bin:$PATH"
 RUN pip install --upgrade pip
-RUN pip install python_jwt git+https://github.com/peppelinux/pyMDOC-CBOR.git
+RUN pip install jwcrypto git+https://github.com/peppelinux/pyMDOC-CBOR.git
 
 # Install circom
 RUN git clone https://github.com/iden3/circom.git && cd circom && git checkout v2.1.6 && cargo build --release && cargo install --path circom;

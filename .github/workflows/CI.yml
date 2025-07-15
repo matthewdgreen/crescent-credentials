@@ -39,7 +39,7 @@ jobs:
           sudo apt install -y python3-pip nodejs
           curl --proto '=https' --tlsv1.3 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          pip install python_jwt
+          pip install jwcrypto
           git clone https://github.com/iden3/circom.git
           cd circom
           git checkout v2.1.6
