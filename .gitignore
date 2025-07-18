@@ -1,25 +1,12 @@
 .vscode/
-/target/
+target/
 Cargo.lock
 bin/
 
-# ignore test vectors, but not the README
-creds/test-vectors
-!creds/test-vectors/README
-
-# ignore all files in inputs except the JSON files
-circuit_setup/inputs/*/**
-!circuit_setup/inputs/*/*.json
-
-# sample files
-sample/issuer/.well-known/
-sample/issuer/keys/
-sample/client/node_modules
-sample/client/mdl.json
-sample/client/dist
-sample/client/.env
-sample/client_helper/data
-sample/verifier/data
-
 # sample output folder created by docker build
 crescent-extension
+
+# There are additional sub-project .gitignore files:
+#  creds/.gitignore
+#  circuit_setup/.gitignore
+#  sample/.gitignore
