@@ -1,0 +1,8 @@
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "no-probestack"]
+
+# This addresses the __rust_probestack issue introduced in Rust 1.89,
+# where stack probing is required for large stack allocations to prevent stack overflows.
+# wasmer-vn uses the __rust_probestack internal flag and needs to fix its usage.
+# but we are stuck on wasmer 2.3.0 with this project.
+# Upgrading to wasmer 6 causes massive errors
