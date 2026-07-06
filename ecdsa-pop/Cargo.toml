@@ -28,8 +28,10 @@ rand = ">=0.8.5"
 flate2 = { version = "1.0.14" }
 num-format = { version = "0.4.3" }
 
-# Enable 'asm' feature when NOT a wasm build
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Enable the 'asm' feature only on x86_64 — halo2curves' asm backend
+# hard-errors on non-x86_64 (e.g. aarch64). This keeps the asm speedup on
+# x86_64 (deploy target) while building on aarch64 (dev) and wasm32.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 halo2curves = { version = "0.8.0", features = ["asm"] }
 
 [features]

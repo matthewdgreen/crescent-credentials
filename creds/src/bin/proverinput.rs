@@ -61,8 +61,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let claims_b64 = parts.next().ok_or("Missing JWT claims")?;
     let _signature_b64 = parts.next().ok_or("Missing JWT signature")?;
 
-    let _jwt_header_decoded = String::from_utf8(base64_url::decode(jwt_header_b64)?)?;
-    let _claims_decoded = String::from_utf8(base64_url::decode(claims_b64)?)?;
+    let _jwt_header_decoded =
+        String::from_utf8(base64_url::decode(jwt_header_b64).map_err(|e| e.to_string())?)?;
+    let _claims_decoded =
+        String::from_utf8(base64_url::decode(claims_b64).map_err(|e| e.to_string())?)?;
 
     let claims: Value =
         serde_json::from_slice(&Base64UrlSafeNoPadding::decode_to_vec(claims_b64, None)?)?;

@@ -142,8 +142,10 @@ Result<(JsonMap, JsonMap, JsonMap), Box<dyn Error>>
     let claims_b64 = parts.next().ok_or("Missing JWT claims")?;
     let signature_b64 = parts.next().ok_or("Missing JWT signature")?;
 
-    let jwt_header_decoded = String::from_utf8(base64_url::decode(jwt_header_b64)?)?;
-    let claims_decoded = String::from_utf8(base64_url::decode(claims_b64)?)?;
+    let jwt_header_decoded =
+        String::from_utf8(base64_url::decode(jwt_header_b64).map_err(|e| e.to_string())?)?;
+    let claims_decoded =
+        String::from_utf8(base64_url::decode(claims_b64).map_err(|e| e.to_string())?)?;
     
     let claims: Value =
         serde_json::from_slice(&Base64UrlSafeNoPadding::decode_to_vec(claims_b64, None)?)?;
@@ -508,7 +510,7 @@ fn to_circom_ints(n_bytes: &[u8], limb_size: usize)-> Result<Vec<BigInt>, Box<dy
 }
 
 fn b64_to_circom_limbs(n_b64: &str, limb_size: usize) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let n_bytes = base64_url::decode(n_b64)?;
+    let n_bytes = base64_url::decode(n_b64).map_err(|e| e.to_string())?;
     to_circom_limbs(&n_bytes, limb_size)
 }
 
