@@ -112,17 +112,26 @@ pub struct ProofSpec {
     pub range_over_year: Option<std::collections::BTreeMap<String, u64>>,
     pub presentation_message: Option<Vec<u8>>,
     pub device_bound: Option<bool>,
+    /// Attributes to expose as Pedersen COMMITMENTS (`PublicIOType::Committed`)
+    /// rather than revealing them: the verifier learns only the commitment
+    /// point; a third-party protocol can then prove statements against the
+    /// opening. Must name `_value` wires present in the config and be disjoint
+    /// from `revealed`. Optional and absent by default, so existing proof-spec
+    /// files are unaffected.
+    #[serde(default)]
+    pub committed: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct ProofSpecInternal {
     pub revealed: Vec<String>,
     pub range_over_year: Vec<(String, u64)>,
-    pub hashed: Vec<String>, 
+    pub hashed: Vec<String>,
     pub presentation_message : Option<Vec<u8>>,
     pub device_bound: bool,
     pub config_str: String,
     pub claim_types: std::collections::BTreeMap<String, String>, // claim name -> claim type
+    pub committed: Vec<String>, // attributes exposed as commitments, not revealed
 }
 
 /// Structure to hold all the parts of a show/presentation proof
@@ -324,6 +333,20 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
         let io_loc = io_locations.get_io_location(&format!("{attr}_value")).unwrap();
         io_types[io_loc - 1] = PublicIOType::Committed;
     }
+    // For each explicitly committed attribute, set the position to Committed.
+    // (Validated in create_proof_spec_internal: present in config, a `_value`
+    // wire, and disjoint from `revealed`.) verify_show applies the identical
+    // classification at the identical precedence position.
+    for attr in &proof_spec.committed {
+        let io_loc = match io_locations.get_io_location(&format!("{attr}_value")) {
+            Ok(loc) => loc,
+            Err(_) => {
+                return_error!(
+                    format!("Asked to commit attribute {attr}, but did not find it in io_locations\nIO locations: {:?}", io_locations.get_all_names()));
+            }
+        };
+        io_types[io_loc - 1] = PublicIOType::Committed;
+    }
     // For the public key attributes, set the position to Revealed
     for i in io_locations.get_public_key_indices() {
         io_types[i] = PublicIOType::Revealed;
@@ -471,6 +494,19 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
             Ok(loc) => loc,
             Err(_) => {
                 println!("Asked to prove range for attribute {attr}, but did not find it in io_locations");
+                return (false, "".to_string());
+            }
+        };
+        io_types[io_loc - 1] = PublicIOType::Committed;
+    }
+
+    // for each explicitly committed attribute, set the position to Committed —
+    // the exact mirror (same precedence position) of create_show_proof.
+    for attr in &proof_spec.committed {
+        let io_loc = match io_locations.get_io_location(&format!("{attr}_value")) {
+            Ok(loc) => loc,
+            Err(_) => {
+                println!("Asked to commit attribute {attr}, but did not find it in io_locations");
                 return (false, "".to_string());
             }
         };

@@ -653,6 +653,21 @@ pub(crate) fn create_proof_spec_internal(proof_spec: &ProofSpec, config_str: &st
         return_error!("Proof spec indicates the credential is device bound, but is missing the presentation message");
     }
 
+    // Validate the explicitly-committed attribute list: each must be a config
+    // claim exposed as a field element (`_value` wire, i.e. NOT reveal_digest),
+    // and must not simultaneously be revealed — committed means the verifier
+    // learns only a Pedersen commitment to the value.
+    let committed: Vec<String> = proof_spec.committed.clone().unwrap_or_default();
+    for attr in &committed {
+        let config_entry = config.get(attr.as_str()).ok_or(format!("Committed attribute {attr} not found in config"))?;
+        if config_entry.get("reveal_digest").is_some() && config_entry.get("reveal_digest").ok_or("Expected boolean value for 'reveal_digest'")?.as_bool().unwrap() {
+            return_error!(format!("Committed attribute {attr} is a digest-revealed claim; only field-element (_value) claims can be committed"));
+        }
+        if proof_spec.revealed.contains(attr) {
+            return_error!(format!("Attribute {attr} cannot be both revealed and committed"));
+        }
+    }
+
     Ok(ProofSpecInternal {
         revealed,
         hashed,
@@ -661,5 +676,6 @@ pub(crate) fn create_proof_spec_internal(proof_spec: &ProofSpec, config_str: &st
         device_bound,
         config_str: config_str.to_owned(),
         claim_types,
+        committed,
     })
 }
