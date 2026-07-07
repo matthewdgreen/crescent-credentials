@@ -41,6 +41,7 @@ fn spec(check_expiry: Option<bool>) -> ProofSpec {
             "height".to_string(),
         ]),
         check_expiry,
+        hide_issuer: None,
     }
 }
 
@@ -114,4 +115,64 @@ fn grafted_expiry_proof_rejected() {
     proof.show_range_exp = donor.show_range_exp;
     let (ok, _) = verify_show(&vp, &proof, &spec_off);
     assert!(!ok, "grafted expiry range proof must be rejected");
+}
+
+// ---- hide_issuer (UT-2) ------------------------------------------------------
+
+fn spec_hidden_issuer() -> ProofSpec {
+    let mut s = spec(Some(false));
+    s.hide_issuer = Some(true);
+    s
+}
+
+#[test]
+fn hide_issuer_show_verifies_with_extra_commitment() {
+    let spec_open = spec(Some(false));
+    let spec_hidden = spec_hidden_issuer();
+    let (proof_open, _) = make_show(&spec_open);
+    let (proof_hidden, vp) = make_show(&spec_hidden);
+    // The pubkey wire moved Revealed -> Committed: exactly one more commitment.
+    assert_eq!(
+        proof_hidden.show_groth16.commited_inputs.len(),
+        proof_open.show_groth16.commited_inputs.len() + 1,
+        "hide_issuer must commit exactly one extra wire (pubkey_hash)"
+    );
+    let (ok, _) = verify_show(&vp, &proof_hidden, &spec_hidden);
+    assert!(ok, "hide_issuer show must verify");
+}
+
+#[test]
+fn hide_issuer_verifier_no_longer_pins_the_issuer() {
+    // Documents the property UT-2 RELIES on: with hide_issuer the crescent
+    // layer does NOT check which issuer signed — a verifier configured with a
+    // DIFFERENT issuer key still accepts, and pinning is the downstream
+    // protocol's job (link + eq/set-membership over the committed tag).
+    let spec_hidden = spec_hidden_issuer();
+    let (proof, _) = make_show(&spec_hidden);
+    let mut wrong_paths = paths();
+    // Point the verifier at a different (valid PEM) key: the DEVICE pubkey.
+    wrong_paths.issuer_pem = format!(
+        "{}/test-vectors/mdl1/device.pub",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let vp_wrong = VerifierParams::new(&wrong_paths).expect("verifier params");
+    let (ok, _) = verify_show(&vp_wrong, &proof, &spec_hidden);
+    assert!(ok, "hide_issuer: crescent layer must accept regardless of the verifier's issuer key");
+    // ...whereas WITHOUT hide_issuer the same wrong-issuer verifier rejects.
+    let spec_open = spec(Some(false));
+    let (proof_open, _) = make_show(&spec_open);
+    let (ok, _) = verify_show(&vp_wrong, &proof_open, &spec_open);
+    assert!(!ok, "revealed-issuer proof must fail under the wrong issuer key");
+}
+
+#[test]
+fn hide_issuer_spec_mismatch_rejected() {
+    let spec_hidden = spec_hidden_issuer();
+    let spec_open = spec(Some(false));
+    let (proof_hidden, vp) = make_show(&spec_hidden);
+    let (ok, _) = verify_show(&vp, &proof_hidden, &spec_open);
+    assert!(!ok, "hidden-issuer proof must not verify under a revealed-issuer spec");
+    let (proof_open, vp2) = make_show(&spec_open);
+    let (ok, _) = verify_show(&vp2, &proof_open, &spec_hidden);
+    assert!(!ok, "revealed-issuer proof must not verify under a hidden-issuer spec");
 }

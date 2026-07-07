@@ -657,6 +657,19 @@ pub(crate) fn create_proof_spec_internal(proof_spec: &ProofSpec, config_str: &st
     // claim exposed as a field element (`_value` wire, i.e. NOT reveal_digest),
     // and must not simultaneously be revealed — committed means the verifier
     // learns only a Pedersen commitment to the value.
+    // hide_issuer is mdl-only: a jwt issuer key spans many RSA-modulus wires
+    // and committing them all is unsupported.
+    let hide_issuer = proof_spec.hide_issuer.unwrap_or(false);
+    if hide_issuer {
+        let credtype = config
+            .get("credtype")
+            .and_then(|v| v.as_str())
+            .unwrap_or("jwt");
+        if credtype != "mdl" {
+            return_error!("hide_issuer is only supported for mdl credentials");
+        }
+    }
+
     let committed: Vec<String> = proof_spec.committed.clone().unwrap_or_default();
     for attr in &committed {
         let config_entry = config.get(attr.as_str()).ok_or(format!("Committed attribute {attr} not found in config"))?;
@@ -682,5 +695,9 @@ pub(crate) fn create_proof_spec_internal(proof_spec: &ProofSpec, config_str: &st
         // so a prover/verifier disagreement about check_expiry already fails
         // the context check before the explicit presence check in verify_show.
         check_expiry: proof_spec.check_expiry.unwrap_or(true),
+        // Absent ⇒ false: the historical revealed-issuer behavior. Also rides
+        // the context (same argument as check_expiry). mdl only — jwt issuer
+        // keys span many modulus wires (validated just above).
+        hide_issuer,
     })
 }

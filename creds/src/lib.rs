@@ -130,6 +130,17 @@ pub struct ProofSpec {
     /// downstream protocol's job.
     #[serde(default)]
     pub check_expiry: Option<bool>,
+    /// Hide the ISSUER: classify the issuer-public-key wires (`pubkey_hash`
+    /// for mdl) as COMMITTED instead of Revealed, and do NOT inject the
+    /// verifier's issuer key into the public inputs — the historical
+    /// injection is exactly what pins the issuer, so with `hide_issuer` the
+    /// crescent layer accepts a validly-signed credential from ANY issuer
+    /// whose key hashes to the committed value, and issuer pinning becomes
+    /// the downstream protocol's job (e.g. an equality or set-membership
+    /// proof against the commitment's opening). Absent/`None` ⇒ `false`.
+    /// mdl only: jwt issuer keys span many modulus wires (unsupported).
+    #[serde(default)]
+    pub hide_issuer: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -143,6 +154,22 @@ pub(crate) struct ProofSpecInternal {
     pub claim_types: std::collections::BTreeMap<String, String>, // claim name -> claim type
     pub committed: Vec<String>, // attributes exposed as commitments, not revealed
     pub check_expiry: bool,     // carry + verify the non-expired range proof
+    pub hide_issuer: bool,      // commit the issuer key wires instead of revealing
+}
+
+/// Rank of the committed wire at 1-indexed io position `pos`: the number of
+/// Committed wires at strictly lower positions. Committed openings (prover)
+/// and commitments (verifier) are emitted in ascending wire order
+/// (groth16rand.rs), so this rank is the wire's index into
+/// `committed_input_openings` / `commited_inputs`. SECURITY: both sides must
+/// index by rank over the FINAL io_types — hardcoded indices silently bind
+/// the wrong wire when the committed set changes (e.g. hide_issuer commits
+/// `pubkey_hash` at a position BELOW the expiration and device-key wires).
+fn committed_rank(io_types: &[PublicIOType], pos: usize) -> usize {
+    io_types[..pos - 1]
+        .iter()
+        .filter(|t| matches!(t, PublicIOType::Committed))
+        .count()
 }
 
 /// Structure to hold all the parts of a show/presentation proof
@@ -358,9 +385,16 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
         };
         io_types[io_loc - 1] = PublicIOType::Committed;
     }
-    // For the public key attributes, set the position to Revealed
+    // The issuer public key wires: Revealed historically (the verifier injects
+    // its own issuer key — that injection IS the issuer pinning); COMMITTED
+    // under hide_issuer (validated mdl-only in create_proof_spec_internal),
+    // moving issuer pinning to the downstream protocol.
     for i in io_locations.get_public_key_indices() {
-        io_types[i] = PublicIOType::Revealed;
+        io_types[i] = if proof_spec.hide_issuer {
+            PublicIOType::Committed
+        } else {
+            PublicIOType::Revealed
+        };
     }
 
     // For the attributes revealed as field elements, we set the position to Revealed and send the value
@@ -419,7 +453,8 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
     let cur_time = Fr::from( time_sec );
 
     let show_range_exp = if proof_spec.check_expiry {
-        let mut com_exp_value = client_state.committed_input_openings[0].clone();
+        let exp_rank = committed_rank(&io_types, exp_value_pos);
+        let mut com_exp_value = client_state.committed_input_openings[exp_rank].clone();
         com_exp_value.m -= cur_time;
         com_exp_value.c -= com_exp_value.bases[0] * cur_time;
         Some(client_state.show_range(&com_exp_value, RANGE_PROOF_INTERVAL_BITS, range_pk))
@@ -428,11 +463,13 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
     };
 
     // Create the device proof if the credential is device bound
-    let device_proof = 
+    let device_proof =
     if proof_spec.device_bound {
-        assert!(client_state.committed_input_openings.len() >= 3);
-        let com0 = client_state.committed_input_openings[1].clone();
-        let com1 = client_state.committed_input_openings[2].clone();
+        let dk0_pos = io_locations.get_io_location("device_key_0_value").unwrap();
+        let dk1_pos = io_locations.get_io_location("device_key_1_value").unwrap();
+        assert!(client_state.committed_input_openings.len() > committed_rank(&io_types, dk1_pos));
+        let com0 = client_state.committed_input_openings[committed_rank(&io_types, dk0_pos)].clone();
+        let com1 = client_state.committed_input_openings[committed_rank(&io_types, dk1_pos)].clone();
         let sig = ECDSASig::new_from_bytes(&proof_spec.presentation_message.unwrap(), &device_signature.unwrap());
         let aux = serde_json::from_str::<Value>(client_state.aux.as_ref().unwrap()).unwrap();
         let aux = aux.as_object().unwrap();
@@ -451,19 +488,19 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
         Some(serde_json::to_string(&revealed_preimages).unwrap())
     };
     let mut show_range_attr= vec![];
-    // calculate the index of the first range proof commitment (1 used for expiration + 2 optional for device keys)
-    let mut commitment_index = if proof_spec.device_bound { 3 } else { 1 };
     // for each range-proofed attribute, create a fresh range proof that the attribute is at least "age" years old // TODO: generalize to non-age attributes
-    for (_, age) in &proof_spec.range_over_year {
+    // (opening index derived by committed rank — see committed_rank)
+    for (attr, age) in &proof_spec.range_over_year {
+        let attr_pos = io_locations.get_io_location(&format!("{attr}_value")).unwrap();
         let days_in_age = Fr::from(days_to_be_age(*age) as u64);
-        let mut com_attr = client_state.committed_input_openings[commitment_index].clone();
+        let mut com_attr =
+            client_state.committed_input_openings[committed_rank(&io_types, attr_pos)].clone();
         com_attr.m -= days_in_age;
         com_attr.c -= com_attr.bases[0] * days_in_age;
 
-        let show_range_a = client_state.show_range(&com_attr, RANGE_PROOF_INTERVAL_BITS, range_pk);       
+        let show_range_a = client_state.show_range(&com_attr, RANGE_PROOF_INTERVAL_BITS, range_pk);
 
         show_range_attr.push(show_range_a);
-        commitment_index += 1;
     }
 
     // Assemble the proof
@@ -530,9 +567,14 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
         io_types[io_loc - 1] = PublicIOType::Committed;
     }
 
-    // set the public key attributes to Revealed
+    // Issuer public key wires: Revealed historically, Committed under
+    // hide_issuer — the exact mirror of create_show_proof.
     for i in io_locations.get_public_key_indices() {
-        io_types[i] = PublicIOType::Revealed;
+        io_types[i] = if proof_spec.hide_issuer {
+            PublicIOType::Committed
+        } else {
+            PublicIOType::Revealed
+        };
     }
 
     // Set disclosed attributes to Revealed
@@ -602,25 +644,45 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
         io_types[device_key_1_pos - 1] = PublicIOType::Committed;
     }
 
-    // Create an inputs vector with the revealed inputs and the issuer's public key
-    let public_key_inputs = 
-        if credtype == "jwt" {
-            pem_to_inputs::<<ECPairing as Pairing>::ScalarField>(&vp.issuer_pem)
-        } else {
-            pem_to_pubkey_hash::<<ECPairing as Pairing>::ScalarField>(&vp.issuer_pem)
-                .map(|scalar| vec![scalar]) // Wrap scalar in a vector
-        };
-    if public_key_inputs.is_err() {
-        print!("Error: Failed to convert issuer public key to input values");
-        return (false, "".to_string());
-    }
-
+    // Create an inputs vector with the revealed inputs and the issuer's public
+    // key. SECURITY: injecting the verifier's OWN issuer key here is what pins
+    // the issuer — the proof only verifies if the prover's key wire matches.
+    // Under hide_issuer the wires are Committed (not Revealed), no injection
+    // happens, and issuer pinning is the downstream protocol's job.
     let mut inputs = vec![];
     inputs.extend(revealed_hashed);
-    inputs.extend(public_key_inputs.unwrap());
+    if !proof_spec.hide_issuer {
+        let public_key_inputs =
+            if credtype == "jwt" {
+                pem_to_inputs::<<ECPairing as Pairing>::ScalarField>(&vp.issuer_pem)
+            } else {
+                pem_to_pubkey_hash::<<ECPairing as Pairing>::ScalarField>(&vp.issuer_pem)
+                    .map(|scalar| vec![scalar]) // Wrap scalar in a vector
+            };
+        if public_key_inputs.is_err() {
+            print!("Error: Failed to convert issuer public key to input values");
+            return (false, "".to_string());
+        }
+        inputs.extend(public_key_inputs.unwrap());
+    }
     inputs.extend(show_proof.revealed_inputs.clone());
-    
+
     let context_str = serde_json::to_string(&proof_spec).unwrap();
+
+    // Structural check before verification: the proof must carry EXACTLY as
+    // many committed inputs as the spec-derived io_types demand (a clean
+    // reject beats an index panic, and a count mismatch can never verify).
+    let expected_committed = io_types
+        .iter()
+        .filter(|t| matches!(t, PublicIOType::Committed))
+        .count();
+    if show_proof.show_groth16.commited_inputs.len() != expected_committed {
+        println!(
+            "committed input count mismatch: proof has {}, spec demands {expected_committed}",
+            show_proof.show_groth16.commited_inputs.len()
+        );
+        return (false, "".to_string());
+    }
 
     let verify_timer = std::time::Instant::now();
     let ret = show_proof.show_groth16.verify(&vp.vk, &vp.pvk, Some(context_str.as_bytes()), &io_types, &inputs);
@@ -645,7 +707,8 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
     // check never skips the freshness check above.
     match (proof_spec.check_expiry, &show_proof.show_range_exp) {
         (true, Some(show_range_exp)) => {
-            let mut ped_com_exp_value = show_proof.show_groth16.commited_inputs[0];
+            let exp_rank = committed_rank(&io_types, exp_value_pos);
+            let mut ped_com_exp_value = show_proof.show_groth16.commited_inputs[exp_rank];
             ped_com_exp_value -= vp.pvk.vk.gamma_abc_g1[exp_value_pos] * cur_time;
             let ret = show_range_exp.verify(
                 &ped_com_exp_value,
@@ -671,14 +734,22 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
         }
     }
 
+    // SECURITY: one range proof per spec entry, exactly — iterating the
+    // PROOF's list without this check would let a prover omit range proofs
+    // and skip the spec's predicates entirely.
+    if show_proof.show_range_attr.len() != proof_spec.range_over_year.len() {
+        println!(
+            "range proof count mismatch: proof has {}, spec demands {}",
+            show_proof.show_range_attr.len(),
+            proof_spec.range_over_year.len()
+        );
+        return (false, "".to_string());
+    }
     for (i, show_range_attr) in show_proof.show_range_attr.iter().enumerate() {
-        // calculate the index of the range proof commitment (skip 1 for expiration value + 2 (optional) for device keys)
-        let commitment_index = i + if proof_spec.device_bound { 3 } else { 1 };
         let attr_name = &proof_spec.range_over_year[i].0;
         let attr_label = format!("{attr_name}_value");
         let age = proof_spec.range_over_year[i].1;
         let days_in_age = Fr::from(days_to_be_age(age) as u64);
-        let mut ped_com_attr_value = show_proof.show_groth16.commited_inputs[commitment_index];
         let io_pos = match io_locations.get_io_location(&attr_label) {
             Ok(loc) => loc,
             Err(_) => {
@@ -686,6 +757,9 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
                 return (false, "".to_string());
             }
         };
+        // commitment index derived by committed rank (see committed_rank)
+        let mut ped_com_attr_value =
+            show_proof.show_groth16.commited_inputs[committed_rank(&io_types, io_pos)];
         ped_com_attr_value -= vp.pvk.vk.gamma_abc_g1[io_pos] * days_in_age;
 
         let ret = show_range_attr.verify(
@@ -705,9 +779,11 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
 
     if proof_spec.device_bound {
         let device_key_0_pos = io_locations.get_io_location("device_key_0_value").unwrap();
-        let device_key_1_pos = io_locations.get_io_location("device_key_1_value").unwrap();        
-        let com0 = show_proof.show_groth16.commited_inputs[1];
-        let com1 = show_proof.show_groth16.commited_inputs[2];
+        let device_key_1_pos = io_locations.get_io_location("device_key_1_value").unwrap();
+        let com0 =
+            show_proof.show_groth16.commited_inputs[committed_rank(&io_types, device_key_0_pos)];
+        let com1 =
+            show_proof.show_groth16.commited_inputs[committed_rank(&io_types, device_key_1_pos)];
         let bases0 = vec![vp.pvk.vk.gamma_abc_g1[device_key_0_pos], vp.pvk.vk.delta_g1];
         let bases1 = vec![vp.pvk.vk.gamma_abc_g1[device_key_1_pos], vp.pvk.vk.delta_g1];
         let device_proof = match show_proof.device_proof.as_ref() {
