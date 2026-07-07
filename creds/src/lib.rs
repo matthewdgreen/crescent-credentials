@@ -120,6 +120,16 @@ pub struct ProofSpec {
     /// files are unaffected.
     #[serde(default)]
     pub committed: Option<Vec<String>>,
+    /// Whether the show carries the built-in "not expired" range proof over
+    /// the expiration wire (`exp`/`valid_until`). Absent/`None` ⇒ `true` (the
+    /// historical always-on behavior, so existing proof-spec files are
+    /// unaffected). When `false` the expiration wire is still COMMITTED (a
+    /// third-party protocol can prove expiry statements against the opening);
+    /// only the range proof and its verification are skipped — the verifier
+    /// then learns nothing about expiry, and enforcing validity becomes the
+    /// downstream protocol's job.
+    #[serde(default)]
+    pub check_expiry: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -132,13 +142,14 @@ pub(crate) struct ProofSpecInternal {
     pub config_str: String,
     pub claim_types: std::collections::BTreeMap<String, String>, // claim name -> claim type
     pub committed: Vec<String>, // attributes exposed as commitments, not revealed
+    pub check_expiry: bool,     // carry + verify the non-expired range proof
 }
 
 /// Structure to hold all the parts of a show/presentation proof
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct ShowProof<E: Pairing> {
     pub show_groth16: ShowGroth16<E>,
-    pub show_range_exp: ShowRange<E>, // non-expired range proof (always performed)
+    pub show_range_exp: Option<ShowRange<E>>, // non-expired range proof (present iff the spec's check_expiry)
     pub show_range_attr: Vec<ShowRange<E>>, // selective attribute range proofs
     pub revealed_inputs: Vec<E::ScalarField>, 
     pub revealed_preimages: Option<String>,
@@ -401,14 +412,20 @@ pub fn create_show_proof(client_state: &mut ClientState<ECPairing>, range_pk : &
     // Create the Groth16 proof for showing
     let show_groth16 = client_state.show_groth16(Some(context_str.as_bytes()), &io_types);
     
-    // Create fresh range proof for the expiration date
+    // Create fresh range proof for the expiration date (spec-driven since
+    // check_expiry: the expiration wire stays COMMITTED either way — see
+    // io_types above — only the "not expired" range proof is optional).
     let time_sec = utc_now_seconds();
     let cur_time = Fr::from( time_sec );
 
-    let mut com_exp_value = client_state.committed_input_openings[0].clone();
-    com_exp_value.m -= cur_time;
-    com_exp_value.c -= com_exp_value.bases[0] * cur_time;
-    let show_range_exp = client_state.show_range(&com_exp_value, RANGE_PROOF_INTERVAL_BITS, range_pk);
+    let show_range_exp = if proof_spec.check_expiry {
+        let mut com_exp_value = client_state.committed_input_openings[0].clone();
+        com_exp_value.m -= cur_time;
+        com_exp_value.c -= com_exp_value.bases[0] * cur_time;
+        Some(client_state.show_range(&com_exp_value, RANGE_PROOF_INTERVAL_BITS, range_pk))
+    } else {
+        None
+    };
 
     // Create the device proof if the credential is device bound
     let device_proof = 
@@ -621,19 +638,37 @@ pub fn verify_show(vp : &VerifierParams<ECPairing>, show_proof: &ShowProof<ECPai
         return (false, "".to_string());
     }
 
-    let mut ped_com_exp_value = show_proof.show_groth16.commited_inputs[0];
-    ped_com_exp_value -= vp.pvk.vk.gamma_abc_g1[exp_value_pos] * cur_time;
-    let ret = show_proof.show_range_exp.verify(
-        &ped_com_exp_value,
-        RANGE_PROOF_INTERVAL_BITS,
-        &vp.range_vk,
-        &io_locations,
-        &vp.pvk,
-        format!("{exp_claim_name}_value").as_str(),
-    );
-    if !ret {
-        println!("show_range.verify failed");
-        return (false, "".to_string());
+    // SECURITY: the expiry range proof's presence must MATCH the verifier's
+    // proof spec exactly (fail closed): a spec that demands the check rejects
+    // a proof without it, and a spec that skips it rejects a proof carrying
+    // one (no proof-shaped data the spec didn't ask for). Skipping the expiry
+    // check never skips the freshness check above.
+    match (proof_spec.check_expiry, &show_proof.show_range_exp) {
+        (true, Some(show_range_exp)) => {
+            let mut ped_com_exp_value = show_proof.show_groth16.commited_inputs[0];
+            ped_com_exp_value -= vp.pvk.vk.gamma_abc_g1[exp_value_pos] * cur_time;
+            let ret = show_range_exp.verify(
+                &ped_com_exp_value,
+                RANGE_PROOF_INTERVAL_BITS,
+                &vp.range_vk,
+                &io_locations,
+                &vp.pvk,
+                format!("{exp_claim_name}_value").as_str(),
+            );
+            if !ret {
+                println!("show_range.verify failed");
+                return (false, "".to_string());
+            }
+        }
+        (false, None) => { /* spec-driven skip: expiry stays committed, unproven */ }
+        (true, None) => {
+            println!("Proof spec requires the expiry check but the proof has no expiry range proof");
+            return (false, "".to_string());
+        }
+        (false, Some(_)) => {
+            println!("Proof spec skips the expiry check but the proof carries an expiry range proof");
+            return (false, "".to_string());
+        }
     }
 
     for (i, show_range_attr) in show_proof.show_range_attr.iter().enumerate() {

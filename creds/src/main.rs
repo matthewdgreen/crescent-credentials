@@ -140,7 +140,7 @@ fn show_proof_size(show_proof: &ShowProof<CrescentPairing>) -> usize {
     print!("Show proof size: ");
     let groth16_size = show_proof.show_groth16.compressed_size();
     print!("{groth16_size} (Groth16 proof) + ");
-    let show_range_size = show_proof.show_range_exp.compressed_size();
+    let show_range_size = show_proof.show_range_exp.as_ref().map_or(0, |p| p.compressed_size());
     print!("{show_range_size} (range proof) ");
 
     // accumulate the size of the show_range_attr proofs

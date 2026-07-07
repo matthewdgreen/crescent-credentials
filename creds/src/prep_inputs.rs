@@ -677,5 +677,10 @@ pub(crate) fn create_proof_spec_internal(proof_spec: &ProofSpec, config_str: &st
         config_str: config_str.to_owned(),
         claim_types,
         committed,
+        // Absent ⇒ true: the historical always-on non-expired proof. The
+        // internal spec is serialized into the Groth16 context on BOTH sides,
+        // so a prover/verifier disagreement about check_expiry already fails
+        // the context check before the explicit presence check in verify_show.
+        check_expiry: proof_spec.check_expiry.unwrap_or(true),
     })
 }
